@@ -13,6 +13,7 @@ import {
 import { ICommandPalette } from '@jupyterlab/apputils';
 import { IDocumentManager } from '@jupyterlab/docmanager';
 import { IDocumentWidget } from '@jupyterlab/docregistry';
+import { ILoggerRegistry } from '@jupyterlab/logconsole';
 import { ISettingRegistry } from '@jupyterlab/settingregistry';
 import { IStatusBar } from '@jupyterlab/statusbar';
 import { ITranslator, nullTranslator } from '@jupyterlab/translation';
@@ -23,6 +24,7 @@ import { Signal } from '@lumino/signaling';
 
 import '../style/index.css';
 
+import { LanguageServer } from './_plugin';
 import { WIDGET_ADAPTER_MANAGER } from './adapter_manager';
 import { FILE_EDITOR_ADAPTER } from './adapters/file_editor';
 import { NOTEBOOK_ADAPTER } from './adapters/notebook';
@@ -124,6 +126,7 @@ export interface ILSPExtension {
   code_overrides: ICodeOverridesRegistry;
   console: ILSPLogConsole;
   translator: ITranslator;
+  user_console: ILoggerRegistry | null;
 }
 
 export class LSPExtension implements ILSPExtension {
@@ -143,13 +146,16 @@ export class LSPExtension implements ILSPExtension {
     private code_overrides_manager: ILSPCodeOverridesManager,
     public console: ILSPLogConsole,
     public translator: ITranslator,
+    public user_console: ILoggerRegistry,
     status_bar: IStatusBar | null
   ) {
     const trans = (translator || nullTranslator).load('jupyterlab-lsp');
-    this.language_server_manager = new LanguageServerManager({});
+    this.language_server_manager = new LanguageServerManager({
+      console: this.console.scope('LanguageServerManager')
+    });
     this.connection_manager = new DocumentConnectionManager({
       language_server_manager: this.language_server_manager,
-      console: this.console
+      console: this.console.scope('DocumentConnectionManager')
     });
 
     const statusButtonExtension = new StatusButtonExtension({
@@ -175,10 +181,18 @@ export class LSPExtension implements ILSPExtension {
     this.setting_registry
       .load(plugin.id)
       .then(settings => {
+        const options = settings.composite as LanguageServer;
         // Store the initial server settings, to be sent asynchronously
         // when the servers are initialized.
-        this.connection_manager.initial_configurations = (settings.composite
-          .language_servers || {}) as TLanguageServerConfigurations;
+        const initial_configuration = (options.language_servers ||
+          {}) as TLanguageServerConfigurations;
+        this.connection_manager.initial_configurations = initial_configuration;
+        // update the server-independent part of configuration immediately
+        this.connection_manager.updateConfiguration(initial_configuration);
+        this.connection_manager.updateLogging(
+          options.logAllCommunication,
+          options.setTrace
+        );
 
         settings.changed.connect(() => {
           this.updateOptions(settings);
@@ -217,11 +231,19 @@ export class LSPExtension implements ILSPExtension {
   }
 
   private updateOptions(settings: ISettingRegistry.ISettings) {
-    const options = settings.composite;
+    const options = settings.composite as LanguageServer;
 
     const languageServerSettings = (options.language_servers ||
       {}) as TLanguageServerConfigurations;
+
+    this.connection_manager.initial_configurations = languageServerSettings;
+    // TODO: if priorities changed reset connections
+    this.connection_manager.updateConfiguration(languageServerSettings);
     this.connection_manager.updateServerConfigurations(languageServerSettings);
+    this.connection_manager.updateLogging(
+      options.logAllCommunication,
+      options.setTrace
+    );
   }
 }
 
@@ -242,7 +264,7 @@ const plugin: JupyterFrontEndPlugin<ILSPFeatureManager> = {
     ILSPLogConsole,
     ITranslator
   ],
-  optional: [IStatusBar],
+  optional: [ILoggerRegistry, IStatusBar],
   activate: (app, ...args) => {
     let extension = new LSPExtension(
       app,
@@ -257,6 +279,7 @@ const plugin: JupyterFrontEndPlugin<ILSPFeatureManager> = {
         ILSPCodeOverridesManager,
         ILSPLogConsole,
         ITranslator,
+        ILoggerRegistry | null,
         IStatusBar | null
       ])
     );

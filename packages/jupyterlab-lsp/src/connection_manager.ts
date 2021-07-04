@@ -1,13 +1,15 @@
 import { PageConfig, URLExt } from '@jupyterlab/coreutils';
 import { Signal } from '@lumino/signaling';
+import type * as protocol from 'vscode-languageserver-protocol';
 
+import { AskServersToSendTraceNotifications } from './_plugin';
 import type * as ConnectionModuleType from './connection';
 import {
   ILSPLogConsole,
-  ILanguageServerConfiguration,
   ILanguageServerManager,
   TLanguageServerConfigurations,
-  TLanguageServerId
+  TLanguageServerId,
+  TServerKeys
 } from './tokens';
 import { expandDottedPaths, sleep, until_ready } from './utils';
 import { IForeignContext, VirtualDocument } from './virtual/document';
@@ -57,7 +59,7 @@ export class DocumentConnectionManager {
   language_server_manager: ILanguageServerManager;
   initial_configurations: TLanguageServerConfigurations;
   private ignored_languages: Set<string>;
-  private console: ILSPLogConsole;
+  private readonly console: ILSPLogConsole;
 
   constructor(options: DocumentConnectionManager.IOptions) {
     this.connections = new Map();
@@ -134,9 +136,14 @@ export class DocumentConnectionManager {
       language
     );
 
-    const language_server_id = this.language_server_manager.getServerId({
+    const matchingServers = this.language_server_manager.getMatchingServers({
       language
     });
+    this.console.debug('Matching servers: ', matchingServers);
+
+    // for now use only the server with the highest priority.
+    const language_server_id =
+      matchingServers.length === 0 ? null : matchingServers[0];
 
     // lazily load 1) the underlying library (1.5mb) and/or 2) a live WebSocket-
     // like connection: either already connected or potentially in the process
@@ -145,7 +152,8 @@ export class DocumentConnectionManager {
       language,
       language_server_id,
       uris,
-      this.on_new_connection
+      this.on_new_connection,
+      this.console
     );
 
     // if connecting for the first time, all documents subsequent documents will
@@ -156,18 +164,38 @@ export class DocumentConnectionManager {
   }
 
   /**
-   * Currently only supports the settings that the language servers
-   * accept using onDidChangeConfiguration messages, under the
-   * "serverSettings" keyword in the setting registry. New keywords can
-   * be added and extra functionality implemented here when needed.
+   * Handles the settings that do not require an existing connection
+   * with a language server (or can influence to which server the
+   * connection will be created, e.g. `priority`).
+   *
+   * This function should be called **before** initialization of servers.
    */
-  public updateServerConfigurations(allServerSettings: any) {
-    for (let language_server_id in allServerSettings) {
-      const parsedSettings = expandDottedPaths(
-        allServerSettings[language_server_id].serverSettings
-      );
+  public updateConfiguration(allServerSettings: TLanguageServerConfigurations) {
+    this.language_server_manager.setConfiguration(allServerSettings);
+  }
 
-      const serverSettings: ILanguageServerConfiguration = {
+  /**
+   * Handles the settings that the language servers accept using
+   * `onDidChangeConfiguration` messages, which should be passed under
+   * the "serverSettings" keyword in the setting registry.
+   * Other configuration options are handled by `updateConfiguration` instead.
+   *
+   * This function should be called **after** initialization of servers.
+   */
+  public updateServerConfigurations(
+    allServerSettings: TLanguageServerConfigurations
+  ) {
+    let language_server_id: TServerKeys;
+
+    for (language_server_id in allServerSettings) {
+      if (!allServerSettings.hasOwnProperty(language_server_id)) {
+        continue;
+      }
+      const rawSettings = allServerSettings[language_server_id];
+
+      const parsedSettings = expandDottedPaths(rawSettings.serverSettings);
+
+      const serverSettings: protocol.DidChangeConfigurationParams = {
         settings: parsedSettings
       };
 
@@ -331,6 +359,18 @@ export class DocumentConnectionManager {
     this.connections.delete(virtual_document.uri);
     this.documents_changed.emit(this.documents);
   }
+
+  updateLogging(
+    logAllCommunication: boolean,
+    setTrace: AskServersToSendTraceNotifications
+  ) {
+    for (const connection of this.connections.values()) {
+      connection.logAllCommunication = logAllCommunication;
+      if (setTrace !== null) {
+        connection.clientNotifications['$/setTrace'].emit({ value: setTrace });
+      }
+    }
+  }
 }
 
 export namespace DocumentConnectionManager {
@@ -351,17 +391,37 @@ export namespace DocumentConnectionManager {
       ? rootUri
       : virtualDocumentsUri;
 
-    const language_server_id = Private.getLanguageServerManager().getServerId({
-      language
-    });
+    // for now take the best match only
+    const matchingServers = Private.getLanguageServerManager().getMatchingServers(
+      {
+        language
+      }
+    );
+    const language_server_id =
+      matchingServers.length === 0 ? null : matchingServers[0];
 
     if (language_server_id === null) {
       throw `No language server installed for language ${language}`;
     }
 
+    // workaround url-parse bug(s) (see https://github.com/krassowski/jupyterlab-lsp/issues/595)
+    let documentUri = URLExt.join(baseUri, virtual_document.uri);
+    if (
+      !documentUri.startsWith('file:///') &&
+      documentUri.startsWith('file://')
+    ) {
+      documentUri = documentUri.replace('file://', 'file:///');
+      if (
+        documentUri.startsWith('file:///users/') &&
+        baseUri.startsWith('file:///Users/')
+      ) {
+        documentUri = documentUri.replace('file:///users/', 'file:///Users/');
+      }
+    }
+
     return {
       base: baseUri,
-      document: URLExt.join(baseUri, virtual_document.uri),
+      document: documentUri,
       server: URLExt.join('ws://jupyter-lsp', language),
       socket: URLExt.join(
         wsBase,
@@ -407,7 +467,8 @@ namespace Private {
     language: string,
     language_server_id: TLanguageServerId,
     uris: DocumentConnectionManager.IURIs,
-    onCreate: (connection: ConnectionModuleType.LSPConnection) => void
+    onCreate: (connection: ConnectionModuleType.LSPConnection) => void,
+    console: ILSPLogConsole
   ): Promise<ConnectionModuleType.LSPConnection> {
     if (_promise == null) {
       // TODO: consider lazy-loading _only_ the modules that _must_ be webpacked
@@ -425,7 +486,9 @@ namespace Private {
       const connection = new LSPConnection({
         languageId: language,
         serverUri: uris.server,
-        rootUri: uris.base
+        rootUri: uris.base,
+        serverIdentifier: language_server_id,
+        console: console
       });
       // TODO: remove remaining unbounded users of connection.on
       connection.setMaxListeners(999);
@@ -441,7 +504,7 @@ namespace Private {
 
   export function updateServerConfiguration(
     language_server_id: TLanguageServerId,
-    settings: ILanguageServerConfiguration
+    settings: protocol.DidChangeConfigurationParams
   ): void {
     const connection = _connections.get(language_server_id);
     if (connection) {

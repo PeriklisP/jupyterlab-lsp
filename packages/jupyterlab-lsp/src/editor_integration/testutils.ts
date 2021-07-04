@@ -12,6 +12,7 @@ import {
   TextModelFactory
 } from '@jupyterlab/docregistry';
 import { FileEditor, FileEditorFactory } from '@jupyterlab/fileeditor';
+import { ILoggerRegistry } from '@jupyterlab/logconsole';
 import * as nbformat from '@jupyterlab/nbformat';
 import {
   Notebook,
@@ -20,7 +21,7 @@ import {
   NotebookPanel
 } from '@jupyterlab/notebook';
 import { ServiceManager } from '@jupyterlab/services';
-import { NBTestUtils } from '@jupyterlab/testutils';
+import { Mock, NBTestUtils } from '@jupyterlab/testutils';
 import { ITranslator } from '@jupyterlab/translation';
 import { Signal } from '@lumino/signaling';
 
@@ -54,6 +55,8 @@ import { EditorAdapter } from './editor_adapter';
 import createNotebookPanel = NBTestUtils.createNotebookPanel;
 import IEditor = CodeEditor.IEditor;
 
+const DEFAULT_SERVER_ID = 'pylsp';
+
 export interface ITestEnvironment {
   document_options: VirtualDocument.IOptions;
 
@@ -71,7 +74,7 @@ export interface ITestEnvironment {
 export class MockLanguageServerManager extends LanguageServerManager {
   async fetchSessions() {
     this._sessions = new Map();
-    this._sessions.set('pyls', {
+    this._sessions.set(DEFAULT_SERVER_ID, {
       spec: {
         languages: ['python']
       }
@@ -105,13 +108,16 @@ export class MockExtension implements ILSPExtension {
   foreign_code_extractors: IForeignCodeExtractorsRegistry;
   code_overrides: ICodeOverridesRegistry;
   console: ILSPLogConsole;
+  user_console: ILoggerRegistry;
   translator: ITranslator;
 
   constructor() {
     this.app = null;
     this.feature_manager = new FeatureManager();
     this.editor_type_manager = new VirtualEditorManager();
-    this.language_server_manager = new MockLanguageServerManager({});
+    this.language_server_manager = new MockLanguageServerManager({
+      console: new BrowserConsole()
+    });
     this.connection_manager = new DocumentConnectionManager({
       language_server_manager: this.language_server_manager,
       console: new BrowserConsole()
@@ -124,6 +130,7 @@ export class MockExtension implements ILSPExtension {
     this.foreign_code_extractors = {};
     this.code_overrides = {};
     this.console = new BrowserConsole();
+    this.user_console = null;
   }
 }
 
@@ -152,7 +159,15 @@ export abstract class TestEnvironment implements ITestEnvironment {
     let adapter_type = this.get_adapter_type();
     this.adapter = new adapter_type(this.extension, this.widget);
     this.virtual_editor = this.create_virtual_editor();
+    // override the virtual editor with a mock/test one
     this.adapter.virtual_editor = this.virtual_editor;
+    this.adapter.initialized
+      .then(() => {
+        // override it again after initialization
+        // TODO: rewrite tests to async to only override after initialization
+        this.adapter.virtual_editor = this.virtual_editor;
+      })
+      .catch(console.error);
   }
 
   create_virtual_editor(): CodeMirrorVirtualEditor {
@@ -240,7 +255,9 @@ function FeatureSupport<TBase extends TestEnvironmentConstructor>(Base: TBase) {
       return new LSPConnection({
         languageId: this.document_options.language,
         serverUri: 'ws://localhost:8080',
-        rootUri: 'file:///unit-test'
+        rootUri: 'file:///unit-test',
+        serverIdentifier: DEFAULT_SERVER_ID,
+        console: new BrowserConsole()
       });
     }
 
@@ -286,13 +303,12 @@ export class FileEditorTestEnvironment extends TestEnvironment {
         fileTypes: ['*']
       }
     });
-    return factory.createNew(
-      new Context({
-        manager: new ServiceManager({ standby: 'never' }),
-        factory: new TextModelFactory(),
-        path: this.document_options.path
-      })
-    );
+    const context = new Context({
+      manager: new Mock.ServiceManagerMock(),
+      factory: new TextModelFactory(),
+      path: this.document_options.path
+    });
+    return factory.createNew(context);
   }
 
   dispose(): void {

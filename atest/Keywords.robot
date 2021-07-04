@@ -113,6 +113,7 @@ Open JupyterLab
     Set Environment Variable    MOZ_HEADLESS    ${HEADLESS}
     ${firefox} =    Get Firefox Binary
     ${geckodriver} =    Which    geckodriver
+    Should Not Be Equal As Strings    ${geckodriver}    None    geckodriver not found, do you need to install firefox-geckodriver?
     ${service args} =    Create List    --log    debug
     Create WebDriver    Firefox
     ...    executable_path=${geckodriver}
@@ -375,6 +376,7 @@ Configure JupyterLab Plugin
     Set Editor Content    ${settings json}    ${CSS USER SETTINGS}
     Wait Until Page Contains    No errors found
     Click Element    css:button[title\='Save User Settings']
+    Wait Until Page Contains    No errors found
     Click Element    ${JLAB XP CLOSE SETTINGS}
 
 Clean Up After Working with File and Settings

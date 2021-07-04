@@ -1,8 +1,74 @@
 ## Changelog
 
-### (unreleased)
+### `@krassowski/jupyterlab-lsp 3.8.0` (2021-07-04)
 
-- Add ability to deactivate Kernel completions or LSP completion through the settings.
+- improvements:
+
+  - add a note on manually enabling backend extension ([#621], thanks @icankeep)
+  - in-app troubleshooting/installation help is now offered for servers which are needed but could not be detected
+    (if auto-detection specification for those is present) ([#634])
+
+- bug fixes:
+  - fix rename shortcut registration in file editor ([#614])
+  - improve performance of icon rendering in completer ([#625])
+  - fix cache misses and concurrency issues for hover ([#630])
+
+[#614]: https://github.com/krassowski/jupyterlab-lsp/pull/614
+[#621]: https://github.com/krassowski/jupyterlab-lsp/pull/621
+[#625]: https://github.com/krassowski/jupyterlab-lsp/pull/625
+[#630]: https://github.com/krassowski/jupyterlab-lsp/pull/630
+[#634]: https://github.com/krassowski/jupyterlab-lsp/pull/634
+
+### `jupyter-lsp 1.4.0` (2021-07-04)
+
+- features:
+
+  - `troubleshoot` property was added to the language server spec, allowing to describe auto-detection troubleshooting
+    ([#634])
+  - new endpoint `specs` will list all language server specifications known to `jupyter-lsp` allowing frontends
+    to suggest installation of specific language servers ([#634])
+
+- changes:
+  - `ShellSpec.is_installed()` signature changed; it now accepts the `LanguageServerManagerAPI` rather than the resolved
+    command location (of `str` type); the specs using only `is_installed_args` are not affected; as this method was only
+    used by internally by the `__call__` implementation (which was adjusted accordingly) this change should not break
+    existing specs unless any of these methods were overridden in sub-classes.
+  - `SpecBase` was moved to `types.py`; it can still be imported from `utils`, but doing so is discouraged
+  - `ShellSpec.solve()` was added to facilitate discovery of command location
+
+[#634]: https://github.com/krassowski/jupyterlab-lsp/pull/634
+
+### `jupyter-lsp 1.3.0` (2021-06-02)
+
+- features:
+  - add auto-detection of pyright server ([#587], thanks @yuntan)
+
+[#587]: https://github.com/krassowski/jupyterlab-lsp/pull/587
+
+### `@krassowski/jupyterlab-lsp 3.7.0` (2021-05-31)
+
+- features:
+
+  - add ability to deactivate Kernel completions or LSP completion through the settings ([#586], thanks @Carreau)
+  - allow to set a priority for LSP server, allowing to choose which server to use when multiple servers are installed ([#588])
+  - add auto-detection of pyright server ([#587], thanks @yuntan)
+  - update from JupyterLab Classic to RetroLab ([#602])
+  - log server messages in user-accessible console ([#606])
+
+- bug fixes:
+
+  - workaround url-parse issue causing problems when using JupyterLab 3.0.15 ([#599])
+
+- other changes:
+  - drop Node 10 (EOL 2 weeks ago) testing on CI, add Node 15 ([#587])
+  - update lsp-ws-connection dependencies ([#606])
+  - old emit-based API of lsp-ws-connection is new deprecated and will be removed in the next major version; please use `serverNotifications`, `clientNotifications`, `clientRequests` and `serverRequests` instead ([#606])
+
+[#586]: https://github.com/krassowski/jupyterlab-lsp/pull/586
+[#588]: https://github.com/krassowski/jupyterlab-lsp/pull/588
+[#599]: https://github.com/krassowski/jupyterlab-lsp/pull/599
+[#602]: https://github.com/krassowski/jupyterlab-lsp/pull/602
+[#606]: https://github.com/krassowski/jupyterlab-lsp/pull/606
 
 ### `jupyter-lsp 1.2.0` (2021-04-26)
 
